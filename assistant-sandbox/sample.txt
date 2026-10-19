@@ -1,0 +1,2 @@
+PortfolioAnalytics is a learning project built with C# and .NET.
+The transactions service records portfolio transactions.
