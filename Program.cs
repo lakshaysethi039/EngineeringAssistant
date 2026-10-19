@@ -1,8 +1,8 @@
 ﻿using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using EngineeringAssistantv0;
 
-string model = "qwen3:4b-instruct";
 List<JsonObject> chatMessages = new List<JsonObject> {
     new JsonObject
     {
@@ -47,7 +47,6 @@ object tools = new[]
 
 Console.WriteLine("Engineering Assitant");
 Console.WriteLine("Type in /exit to end this program.");
-
 while (true)
 {
     Console.Write("Prompt: ");
@@ -60,68 +59,113 @@ while (true)
         Console.WriteLine("Please provide a non-empty prompt");
         continue;
     }
+
     chatMessages.Add(new JsonObject
-    {
-        ["role"] = "user",
-        ["content"] = prompt
-    }
+        {
+            ["role"] = "user",
+            ["content"] = prompt
+        }
     );
 
-    string modelUrl = "http://127.0.0.1:11434/api/chat";
-
     using HttpClient httpClient = new HttpClient();
-    object requestBody = new
-    {
-        model,
-        messages = chatMessages,
-        tools,
-        stream = false,
-    };
-
-    string requestJson = JsonSerializer.Serialize(requestBody);
-
-    using StringContent requestContent = new (requestJson, Encoding.UTF8, "application/json");
     try
     {
-        using HttpResponseMessage response = await httpClient.PostAsync(modelUrl, requestContent);
-        string responseJson = await response.Content.ReadAsStringAsync();
-
-        if (!response.IsSuccessStatusCode)
+        bool finalAnswerReceived = false;
+        for (int ri = 0; !finalAnswerReceived && ri < StartupConstants.MaxToolCallsAllowed; ri++)
         {
-            Console.WriteLine(
-                $"Ollama returned HTTP {(int)response.StatusCode}: {responseJson}");
-
-            // Remove this user message because Ollama did not answer it.
-            chatMessages.RemoveAt(chatMessages.Count - 1);
-            continue;
-        }
-
-        using JsonDocument document = JsonDocument.Parse(responseJson);
-        JsonElement messageElement = document.RootElement.GetProperty("message");
-
-        // Store the assistant's answer too, so it becomes context next turn.
-        JsonObject assistantMessage = JsonNode.Parse(messageElement.GetRawText())!.AsObject();
-
-        if (assistantMessage["tool_calls"] is JsonArray toolCalls && toolCalls.Count > 0)
-        {
-            foreach (JsonNode? toolCall in toolCalls)
+            object requestBody = new
             {
-                string toolName =
-                    toolCall?["function"]?["name"]?.GetValue<string>() ?? "";
+                model = StartupConstants.ModelName,
+                messages = chatMessages,
+                tools,
+                stream = false,
+            };
 
-                string arguments =
-                    toolCall?["function"]?["arguments"]?.ToJsonString() ?? "{}";
+            string requestJson = JsonSerializer.Serialize(requestBody);
+            Console.WriteLine($"Following request body is sent to model: \n{requestJson}");
+            using StringContent requestContent = new(requestJson, Encoding.UTF8, "application/json");
+            using HttpResponseMessage response = await httpClient.PostAsync(StartupConstants.ModelBaseUrl + StartupConstants.ModelChatEndpoint, requestContent);
+            string responseJson = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"Following response came from model:\n{responseJson}");
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.WriteLine(
+                    $"Ollama returned HTTP {(int)response.StatusCode}: {responseJson}");
 
-                Console.WriteLine($"Tool: {toolName}");
-                Console.WriteLine($"Arguments: {arguments}");
+                // Remove this user message because Ollama did not answer it.
+                chatMessages.RemoveAt(chatMessages.Count - 1);
+                break;
+            }
+
+            using JsonDocument document = JsonDocument.Parse(responseJson);
+            JsonElement messageElement = document.RootElement.GetProperty("message");
+
+            // Store the assistant's answer too, so it becomes context next turn.
+            JsonObject assistantMessage = JsonNode.Parse(messageElement.GetRawText())!.AsObject();
+            if (assistantMessage["tool_calls"] is JsonArray toolCalls && toolCalls.Count > 0)
+            {
+                foreach (JsonNode? toolCall in toolCalls)
+                {
+                    string toolName =
+                        toolCall?["function"]?["name"]?.GetValue<string>() ?? "";
+
+                    JsonObject? arguments =
+                        toolCall?["function"]?["arguments"] as JsonObject;
+
+                    string? fileName =
+                        arguments?["fileName"]?.GetValue<string>();
+
+                    Console.WriteLine($"Model requested tool: {toolName}");
+                    string toolResult;
+
+                    // Allow only added tools with their possible argument values
+                    if (toolName == "read_test_file" && fileName == "sample.txt")
+                    {
+                        string sandboxDirectory =
+                            Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "assistant-sandbox"));
+
+                        string allowedFilePath = Path.Combine(sandboxDirectory, "sample.txt");
+                        if (File.Exists(allowedFilePath))
+                        {
+                            string fileContents = await File.ReadAllTextAsync(allowedFilePath);
+                            toolResult = $"Contents of sample.txt:\n{fileContents}";
+                        }
+                        else
+                            toolResult = "The permitted sample.txt file was not found in the sandbox folder";
+                    }
+                    else
+                    {
+                        toolResult =
+                            "Tool request rejected. As of now only read_test_file tool call is permitted with sample.txt as value for its fileName argument";
+                    }
+
+                    Console.WriteLine("Tool result returned to the model: " + toolResult);
+                    chatMessages.Add(new JsonObject
+                    {
+                        ["role"] = "tool",
+                        ["tool_name"] = toolName,
+                        ["content"] = toolResult
+                    });
+                }
+            }
+
+            string? answer = assistantMessage["content"]?.GetValue<string>();
+            // If we have got final answer from model
+            if (!string.IsNullOrEmpty(answer))
+            {
+                finalAnswerReceived = true;
+                // Preserve the whole message, including tool_calls if present.
+                chatMessages.Add((JsonObject)assistantMessage.DeepClone());
+                Console.WriteLine();
+                Console.WriteLine($"Assistant: {answer}");
+                Console.WriteLine();
             }
         }
 
-        // Preserve the whole message, including tool_calls if present.
-        chatMessages.Add((JsonObject)assistantMessage.DeepClone());
-        Console.WriteLine();
-        Console.WriteLine($"Assistant: {assistantMessage}");
-        Console.WriteLine();
+        if (!finalAnswerReceived)
+        {
+            Console.WriteLine("Stopped after the tool-round limit or an API error. You can try asking again");
+        }
     }
     catch (HttpRequestException ex)
     {
