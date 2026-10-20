@@ -1,7 +1,7 @@
 ﻿using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using EngineeringAssistantv0;
+using EngineeringAssistantv0.StartupConstants;
 
 List<JsonObject> chatMessages = new List<JsonObject> {
     new JsonObject
@@ -84,7 +84,7 @@ while (true)
             string requestJson = JsonSerializer.Serialize(requestBody);
             Console.WriteLine($"Following request body is sent to model: \n{requestJson}");
             using StringContent requestContent = new(requestJson, Encoding.UTF8, "application/json");
-            using HttpResponseMessage response = await httpClient.PostAsync(StartupConstants.ModelBaseUrl + StartupConstants.ModelChatEndpoint, requestContent);
+            using HttpResponseMessage response = await httpClient.PostAsync(LocalStartupConstants.ModelBaseUrl + StartupConstants.ModelChatEndpoint, requestContent);
             string responseJson = await response.Content.ReadAsStringAsync();
             Console.WriteLine($"Following response came from model:\n{responseJson}");
             if (!response.IsSuccessStatusCode)

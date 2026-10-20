@@ -2,15 +2,10 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace EngineeringAssistantv0
+namespace EngineeringAssistantv0.StartupConstants
 {
     public class StartupConstants
     {
-        /// <summary>
-        /// Base url serving model
-        /// </summary>
-        public const string ModelBaseUrl = "http://127.0.0.1:11434";
-
         /// <summary>
         /// Route for sending messages to model
         /// </summary>
